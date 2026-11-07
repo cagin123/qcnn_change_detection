@@ -5,9 +5,9 @@
 [![Qiskit](https://img.shields.io/badge/Quantum-Qiskit%20%7C%20PennyLane-6929C4.svg)](https://qiskit.org/)
 [![PyTorch](https://img.shields.io/badge/Framework-PyTorch-EE4C2C.svg)](https://pytorch.org/)
 
-A hybrid **Quantum Automatic Change Detection (QACD)** pipeline for wildfire burned-area delineation from bi-temporal Landsat-8 Operational Land Imager (OLI) satellite imagery ($30\text{ m}$ spatial resolution), built with [Qiskit](https://qiskit.org/), [PennyLane](https://pennylane.ai/), and [PyTorch](https://pytorch.org/).
+A hybrid Quantum Automatic Change Detection (QACD) pipeline for wildfire burned-area delineation from bi-temporal Landsat-8 Operational Land Imager (OLI) satellite imagery ($30\text{ m}$ spatial resolution), built with [Qiskit](https://qiskit.org/), [PennyLane](https://pennylane.ai/), and [PyTorch](https://pytorch.org/).
 
-The pipeline extracts localized bi-temporal image patches, encodes each patch pair into a 9-qubit quantum state using **FRQI (Flexible Representation of Quantum Images)**, trains a parameterized **Quantum Convolutional Neural Network (QCNN)** with alternating convolution and pooling layers via the parameter-shift rule, and produces full-tile burned-area segmentation maps.
+The pipeline extracts localized bi-temporal image patches, encodes each patch pair into a 9-qubit quantum state using FRQI (Flexible Representation of Quantum Images), trains a parameterized Quantum Convolutional Neural Network (QCNN) with alternating convolution and pooling layers via the parameter-shift rule, and produces full-tile burned-area segmentation maps.
 
 ---
 
@@ -25,9 +25,9 @@ The pipeline extracts localized bi-temporal image patches, encodes each patch pa
 
 *Fig. 2. FRQI-based quantum state preparation pipeline for bi-temporal pre-fire and post-fire satellite image patches.*
 
-For each target pixel center $(r, c)$, localized $11 \times 11$ pre-fire and post-fire windows ($121$ pixels each) are flattened into a 242-element bi-temporal vector, normalized to $[0, 1]$, and zero-padded with $14$ trailing zeros to $N = 2^8 = 256$ elements $\mathbf{v} = (v_0, \dots, v_{255})^\top$. Hadamard gates $H^{\otimes 8}$ prepare a uniform superposition over the 8-qubit position register $|k\rangle_p$ ($q_0\text{--}q_7$), while 8-qubit controlled rotations $C^8_{|k\rangle_p} R_Y(2\theta_k)$ entangle each pixel intensity angle $\theta_k = \frac{\pi}{2}v_k$ into the color qubit $|q_8\rangle$:
+For each target pixel center $(r, c)$, localized $11 \times 11$ pre-fire and post-fire windows ($121$ pixels each) are flattened into a 242-element bi-temporal vector, normalized to $[0, 1]$, and zero-padded with $14$ trailing zeros to $N = 2^8 = 256$ elements $v = (v_0, \dots, v_{255})^\top$. Hadamard gates $H^{\otimes 8}$ prepare a uniform superposition over the 8-qubit position register $|k\rangle_p$ ($q_0\text{--}q_7$), while 8-qubit controlled rotations $C^8_{|k\rangle_p} R_Y(2\theta_k)$ entangle each pixel intensity angle $\theta_k = \frac{\pi}{2}v_k$ into the color qubit $|q_8\rangle$:
 
-$$|I(\mathbf{v})\rangle = \frac{1}{16}\sum_{k=0}^{255}\left[\cos(\theta_k)|0\rangle_c + \sin(\theta_k)|1\rangle_c\right] \otimes |k\rangle_p$$
+$$|I(v)\rangle = \frac{1}{16}\sum_{k=0}^{255}\left[\cos(\theta_k)|0\rangle_c + \sin(\theta_k)|1\rangle_c\right] \otimes |k\rangle_p$$
 
 The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN ($9 \rightarrow 4 \rightarrow 2 \rightarrow 1$ active qubits) composed of staggered two-qubit convolution blocks ($R_Y, R_Z, \mathrm{CX}$) and controlled quantum pooling blocks ($CR_Z, CR_Y$) before Pauli-$Z$ expectation readout.
 
