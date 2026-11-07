@@ -2,3 +2,10 @@ outputs/
 __pycache__/
 *.pyc
 .DS_Store
+.mplcache/
+*.zip
+loc/
+india_loc/
+Final_with_India/
+changeformer_rgb.pth
+siamese_unet_rgb.pth
