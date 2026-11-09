@@ -5,9 +5,9 @@
 [![Qiskit](https://img.shields.io/badge/Quantum-Qiskit%20%7C%20PennyLane-6929C4.svg)](https://qiskit.org/)
 [![PyTorch](https://img.shields.io/badge/Framework-PyTorch-EE4C2C.svg)](https://pytorch.org/)
 
-A hybrid Quantum Automatic Change Detection (QACD) pipeline for wildfire burned-area delineation from bi-temporal Landsat-8 Operational Land Imager (OLI) satellite imagery ($30\text{ m}$ spatial resolution), built with [Qiskit](https://qiskit.org/), [PennyLane](https://pennylane.ai/), and [PyTorch](https://pytorch.org/).
+Official implementation of the proposed **Quantum Automatic Change Detection (QACD)** framework for wildfire burned-area delineation from bi-temporal Landsat-8 Operational Land Imager (OLI) satellite imagery ($30\text{ m}$ spatial resolution), built with [Qiskit](https://qiskit.org/), [PennyLane](https://pennylane.ai/), and [PyTorch](https://pytorch.org/).
 
-The pipeline extracts localized bi-temporal image patches, encodes each patch pair into a 9-qubit quantum state using FRQI (Flexible Representation of Quantum Images), trains a parameterized Quantum Convolutional Neural Network (QCNN) with alternating convolution and pooling layers via the parameter-shift rule, and produces full-tile burned-area segmentation maps.
+The pipeline extracts localized $11 \times 11$ bi-temporal image patches, encodes each patch pair into a 9-qubit quantum state using FRQI (Flexible Representation of Quantum Images), trains a parameterized 3-stage Quantum Convolutional Neural Network (QCNN) with alternating two-qubit convolution and controlled pooling layers via the analytical parameter-shift rule, and produces full-tile burned-area segmentation maps.
 
 ---
 
@@ -29,7 +29,7 @@ For each target pixel center $(r, c)$, localized $11 \times 11$ pre-fire and pos
 
 $$|I(v)\rangle = \frac{1}{16}\sum_{k=0}^{255}\left[\cos(\theta_k)|0\rangle_c + \sin(\theta_k)|1\rangle_c\right] \otimes |k\rangle_p$$
 
-The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN ($9 \rightarrow 4 \rightarrow 2 \rightarrow 1$ active qubits) composed of staggered two-qubit convolution blocks ($R_Y, R_Z, \mathrm{CX}$) and controlled quantum pooling blocks ($CR_Z, CR_Y$) before Pauli-$Z$ expectation readout.
+The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN ($9 \rightarrow 4 \rightarrow 2 \rightarrow 1$ active qubits; $62$ trainable quantum gate parameters) composed of staggered two-qubit convolution blocks ($R_Y, R_Z, \mathrm{CX}$) and controlled quantum pooling blocks ($CR_Z, CR_Y$) before Pauli-$Z$ expectation readout.
 
 ---
 
@@ -43,22 +43,16 @@ The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN
 
 ---
 
-## Repository Structure
+## Repository Structure (Proposed QACD Framework)
 
 ```text
 .
 ├── qcnn_change_detection.py          # Standalone Qiskit FRQI-QCNN pipeline (patch training & GeoTIFF map export)
-├── model_qcnn.py                     # 9-qubit FRQI + 3-stage QCNN circuit implementation
-├── model_qacd.py                     # Hybrid QACD model architecture
-├── model_siamese_unet.py             # Fully Convolutional Siamese U-Net baseline
-├── model_changeformer.py             # ChangeFormer MiT Siamese transformer baseline
-├── model_bit.py                      # Bi-Temporal Image Transformer (BIT) baseline
-├── model_a2net.py                    # A2Net lightweight attention baseline
-├── model_classical_dnbr.py           # Classical dNBR threshold & parameter-matched CNN control
-├── dataset_cd.py                     # Multi-continental Landsat-8 OLI dataset loader & swath mask
-├── train_and_evaluate_all_rgb.py     # Unified training & evaluation runner
-├── train_evaluate_models.py          # Model training utility script
-├── run_rgb_evaluation.py             # Evaluation script
+├── model_qcnn.py                     # 9-qubit FRQI state preparation + 3-stage QCNN circuit implementation
+├── model_qacd.py                     # Proposed hybrid QACD model architecture & spatial refinement head
+├── dataset_cd.py                     # Multi-continental Landsat-8 OLI dataset loader & orbital swath mask
+├── run_rgb_evaluation.py             # Evaluation script for the proposed QACD model (Test 1 Global & Test 2 India)
+├── qacd_rgb.pth                      # Pretrained QACD model checkpoint
 ├── requirements.txt                  # Python package dependencies
 └── docs/                             # Study area map (Fig. 1) & FRQI encoding diagram (Fig. 2)
     ├── study_areas_map.jpg
@@ -75,7 +69,7 @@ The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN
 pip install -r requirements.txt
 ```
 
-### 2. Run the Qiskit FRQI-QCNN Pipeline
+### 2. Run the Standalone Qiskit FRQI-QCNN Pipeline
 
 Place your bi-temporal raster data under `loc/` (training) and `india_loc/` (testing), then run:
 
@@ -83,17 +77,46 @@ Place your bi-temporal raster data under `loc/` (training) and `india_loc/` (tes
 python qcnn_change_detection.py
 ```
 
-### 3. Train and Evaluate Models
+### 3. Evaluate the Proposed QACD Model on Test Benchmarks
 
 ```bash
-python train_and_evaluate_all_rgb.py
+python run_rgb_evaluation.py
 ```
+
+---
+
+## Classical Baseline Algorithms (Reference Citations)
+
+This repository contains exclusively the proposed **QACD (FRQI-QCNN)** implementation. For the classical change detection baselines and radiometric burn-severity indices benchmarked in our study, please refer to their original publications and official implementations:
+
+1. **Siamese U-Net (FC-Siam-diff):**
+   > R. C. Daudt, B. Le Saux, and A. Boulch, "Fully convolutional siamese networks for change detection," in *Proc. 25th IEEE International Conference on Image Processing (ICIP)*, Athens, Greece, Oct. 2018, pp. 4063–4067, doi: [10.1109/ICIP.2018.8451652](https://doi.org/10.1109/ICIP.2018.8451652).
+
+2. **ChangeFormer (Hierarchical Mix-Transformer Siamese Network):**
+   > W. G. C. Bandara and V. M. Patel, "A transformer-based siamese network for change detection," in *Proc. IEEE International Geoscience and Remote Sensing Symposium (IGARSS)*, Kuala Lumpur, Malaysia, Jul. 2022, pp. 207–210, doi: [10.1109/IGARSS46834.2022.9883686](https://doi.org/10.1109/IGARSS46834.2022.9883686).
+
+3. **MaskCD (Mask-Classification Change Detection Transformer):**
+   > W. Yu, X. Zhang, S. Pun, and M. Liu, "MaskCD: A remote sensing change detection network based on mask classification," *IEEE Transactions on Geoscience and Remote Sensing*, vol. 62, pp. 1–16, 2024, Art. no. 5621216, doi: [10.1109/TGRS.2024.3392104](https://doi.org/10.1109/TGRS.2024.3392104).
+
+4. **BIT (Bi-Temporal Image Transformer):**
+   > H. Chen, Z. Qi, and Z. Shi, "Remote sensing image change detection with transformers," *IEEE Transactions on Geoscience and Remote Sensing*, vol. 60, pp. 1–14, 2022, Art. no. 5607514, doi: [10.1109/TGRS.2021.3095166](https://doi.org/10.1109/TGRS.2021.3095166).
+
+5. **USGS dNBR Burn Severity Thresholding:**
+   > C. H. Key and N. C. Benson, "Landscape assessment (LA): Sampling and analysis methods," in *FIREMON: Fire Effects Monitoring and Inventory System*, Gen. Tech. Rep. RMRS-GTR-164-CD, Ogden, UT, USA: USDA Forest Service, Rocky Mountain Research Station, 2006, pp. LA-1–LA-55.
+   > J. D. Miller and A. E. Thode, "Quantifying burn severity in a heterogeneous landscape with a relative version of the delta Normalized Burn Ratio (dNBR)," *Remote Sensing of Environment*, vol. 109, no. 1, pp. 66–80, Jul. 2007, doi: [10.1016/j.rse.2006.12.006](https://doi.org/10.1016/j.rse.2006.12.006).
+
+### Foundational Quantum Computing References
+
+- **FRQI (Flexible Representation of Quantum Images):**
+  > P. Q. Le, F. Dong, and K. Hirota, "A flexible representation of quantum images for polynomial preparation, image compression, and processing operations," *Quantum Information Processing*, vol. 10, no. 1, pp. 63–84, Feb. 2011, doi: [10.1007/s11128-010-0177-y](https://doi.org/10.1007/s11128-010-0177-y).
+- **QCNN (Quantum Convolutional Neural Networks):**
+  > I. Cong, S. Choi, and M. D. Lukin, "Quantum convolutional neural networks," *Nature Physics*, vol. 15, no. 12, pp. 1273–1278, Dec. 2019, doi: [10.1038/s41567-019-0648-8](https://doi.org/10.1038/s41567-019-0648-8).
 
 ---
 
 ## Authors
 
-- **M. S. Shyam Sunder** — Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India
+- **M. S. Shyam Sunder** — Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India (`murushyam@gmail.com`)
 - **Çağın Bera Bay** — FMV Işık Erenköy Science High School, Istanbul, Türkiye
 - **Yasemin Poyraz Koçak** — Department of Computer Technologies, Istanbul University-Cerrahpaşa, Istanbul, Türkiye
 - **Bhishma Tyagi** (*Corresponding Author*) — Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India (`tyagib@nitrkl.ac.in`)

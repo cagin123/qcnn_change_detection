@@ -7,8 +7,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.colors import ListedColormap
 from sklearn.metrics import accuracy_score, f1_score
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -612,24 +610,6 @@ def best_threshold(y, p):
     return best_t
 
 
-def mean_abs_diff(X, cfg):
-    if cfg["encoding_mode"] == "concat":
-        half = X.shape[1] // 2
-        return np.abs(X[:, :half] - X[:, half:]).mean(axis=1)
-    return np.abs(X - 0.5).mean(axis=1)
-
-
-def fit_baselines(X_tr, y_tr, seed, cfg):
-    lr_all = LogisticRegression(max_iter=5000).fit(X_tr, y_tr)
-    rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=seed).fit(X_tr, y_tr)
-    lr_1d = LogisticRegression().fit(mean_abs_diff(X_tr, cfg)[:, None], y_tr)
-    return {
-        "LogReg"     : lambda X: lr_all.predict_proba(X)[:, 1],
-        "RandForest" : lambda X: rf.predict_proba(X)[:, 1],
-        "MeanAbsDiff": lambda X: lr_1d.predict_proba(mean_abs_diff(X, cfg)[:, None])[:, 1],
-    }
-
-
 def accumulate_map(coords, proba, shape, ps):
     H, W = shape
     pmap = np.zeros((H, W), dtype=np.float32)
@@ -741,8 +721,6 @@ def run_seed(seed, train_recs, test_recs, cfg):
     print(f"[seed {seed}] X_tr={X_tr.shape} X_val={X_va.shape} "
           f"calibration={X_cal.shape} (natural positive rate={y_cal.mean():.3f})")
 
-    baselines = fit_baselines(X_tr, y_tr, seed, cfg)
-
     model = QCNNChangeDetector(n_qubits=cfg["n_qubits"], seed=seed)
     print(f"[seed {seed}] QCNN parameters={model.n_params}, "
           f"~{(2 * model.n_params + 1) * cfg['batch_size']} circuits per gradient step")
@@ -752,7 +730,7 @@ def run_seed(seed, train_recs, test_recs, cfg):
               ckpt_path=ckpt, sig=config_signature(cfg, CKPT_KEYS))
     np.save(os.path.join(seed_dir, "trained_params.npy"), model.params_)
 
-    predictors = {"QCNN": model.predict_proba, **baselines}
+    predictors = {"QCNN": model.predict_proba}
 
     print(f"[seed {seed}] threshold calibration (held-out val, natural distribution)")
     thresholds = {}
