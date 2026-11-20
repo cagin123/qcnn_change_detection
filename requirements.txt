@@ -1,11 +1,9 @@
+torch>=2.1.0
 numpy>=1.24.0
-torch>=2.0.0
-torchvision>=0.15.0
-rasterio>=1.3.0
-matplotlib>=3.7.0
-scikit-learn>=1.2.0
-scipy>=1.10.0
-Pillow>=9.5.0
-qiskit>=1.0.0
-qiskit-aer>=0.13.0
-pennylane>=0.35.0
+tifffile>=2023.7.10
+Pillow>=10.0.0
+
+# Optional: Qiskit 1.x circuit transpilation and NISQ noise verification
+# qiskit>=1.2.0
+# qiskit-aer>=0.15.0
+# qiskit-ibm-runtime>=0.29.0
