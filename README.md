@@ -1,67 +1,81 @@
-# Quantum Automatic Change Detection (QACD) for Wildfire Burned Area Mapping
+# Quantum Automatic Change Detection (QACD) Model for Wildfire Burned Area Mapping
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB.svg)](https://www.python.org/)
-[![Qiskit](https://img.shields.io/badge/Quantum-Qiskit%20%7C%20PennyLane-6929C4.svg)](https://qiskit.org/)
+[![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-3776AB.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/Framework-PyTorch-EE4C2C.svg)](https://pytorch.org/)
+[![Qiskit](https://img.shields.io/badge/Quantum-Qiskit%201.x-6929C4.svg)](https://www.ibm.com/quantum/qiskit)
 
-Official implementation of the proposed **Quantum Automatic Change Detection (QACD)** framework for wildfire burned-area delineation from bi-temporal Landsat-8 Operational Land Imager (OLI) satellite imagery ($30\text{ m}$ spatial resolution), built with [Qiskit](https://qiskit.org/), [PennyLane](https://pennylane.ai/), and [PyTorch](https://pytorch.org/).
+Official source code for the proposed hybrid **Quantum Automatic Change Detection (QACD)** model for wildfire burned-area mapping from multi-sensor **Landsat-7 ETM+** (2011) and **Landsat-8 OLI** (2019–2022) Collection 2 Level-2 surface reflectance imagery across nine fire events in North America, Australia, and India (1,486 bi-temporal $256 \times 256$ tile pairs at 30 m pixel scale in Web Mercator `EPSG:3857`).
 
-The pipeline extracts localized $11 \times 11$ bi-temporal image patches, encodes each patch pair into a 9-qubit quantum state using FRQI (Flexible Representation of Quantum Images), trains a parameterized 3-stage Quantum Convolutional Neural Network (QCNN) with alternating two-qubit convolution and controlled pooling layers via the analytical parameter-shift rule, and produces full-tile burned-area segmentation maps.
+> **Scope:** This repository contains strictly the zero-leakage implementation of the proposed **QACD** architecture (9-qubit FRQI state preparation, 62-parameter three-stage QCNN core, 17,488-parameter classical spatial refinement head, controlled internal ablations, pretrained checkpoints, and Qiskit circuit/noise verification). Classical deep learning baselines compared in the manuscript are referenced below.
 
 ---
 
 ## Study Areas (Fig. 1)
 
-![Global Distribution of Wildfire Study Areas](docs/study_areas_map.jpg)
+![Global Distribution of Wildfire Study Areas](docs/fig1_study_areas.png)
 
-*Fig. 1. Global distribution of the nine wildfire study areas across North America, Australia, and India with differenced Normalized Burn Ratio (dNBR) burn-severity insets.*
-
----
-
-## Method Overview: FRQI Quantum State Preparation (Fig. 2)
-
-![FRQI Quantum Encoding Pipeline](docs/method_overview.png)
-
-*Fig. 2. FRQI-based quantum state preparation pipeline for bi-temporal pre-fire and post-fire satellite image patches.*
-
-For each target pixel center $(r, c)$, localized $11 \times 11$ pre-fire and post-fire windows ($121$ pixels each) are flattened into a 242-element bi-temporal vector, normalized to $[0, 1]$, and zero-padded with $14$ trailing zeros to $N = 2^8 = 256$ elements $v = (v_0, \dots, v_{255})^\top$. Hadamard gates $H^{\otimes 8}$ prepare a uniform superposition over the 8-qubit position register $|k\rangle_p$ ($q_0\text{--}q_7$), while 8-qubit controlled rotations $C^8_{|k\rangle_p} R_Y(2\theta_k)$ entangle each pixel intensity angle $\theta_k = \frac{\pi}{2}v_k$ into the color qubit $|q_8\rangle$:
-
-$$|I(v)\rangle = \frac{1}{16}\sum_{k=0}^{255}\left[\cos(\theta_k)|0\rangle_c + \sin(\theta_k)|1\rangle_c\right] \otimes |k\rangle_p$$
-
-The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN ($9 \rightarrow 4 \rightarrow 2 \rightarrow 1$ active qubits; $62$ trainable quantum gate parameters) composed of staggered two-qubit convolution blocks ($R_Y, R_Z, \mathrm{CX}$) and controlled quantum pooling blocks ($CR_Z, CR_Y$) before Pauli-$Z$ expectation readout.
+*Fig. 1. Global distribution of the nine wildfire study areas (Natural Earth Robinson projection) and mosaicked 30 m Landsat differenced Normalized Burn Ratio (dNBR) insets across North America, Australia, and India, including Landsat-7 ETM+ SLC-off (Wallow Fire, 2011) and Landsat-8 OLI (2019–2022) composites.*
 
 ---
 
-## Pipeline Overview
+## Method Overview: 9-Qubit FRQI Encoding & Hierarchical QCNN (Figs. 2–3)
 
-1. **Data Loading & Swath Masking** — Reads co-registered pre-fire and post-fire Landsat-8 OLI scenes together with ground-truth change masks ($\mathrm{dNBR} \ge 0.27$) and applies valid-pixel orbital swath masking.
-2. **Patch Extraction** — Extracts sliding-window $11 \times 11$ patches from the normalized pre-fire and post-fire bands and concatenates them into a 242-element feature vector per patch (padded to $256 = 2^8$).
-3. **FRQI Encoding** — Encodes each normalized patch vector into a 9-qubit quantum state ($8$ spatial position qubits + $1$ color qubit).
-4. **QCNN Classification** — Processes the quantum state through three alternating stages of parameterized two-qubit convolution and controlled pooling layers, trained end-to-end using the analytical two-term parameter-shift rule and AdamW optimization.
-5. **Prediction Map Generation** — Stitches predicted change probabilities into full-resolution $256 \times 256$ binary segmentation maps.
+![FRQI Quantum State Preparation Pipeline](docs/fig2_frqi_pipeline.png)
+
+*Fig. 2. FRQI quantum state preparation pipeline for localized $11 \times 11$ pre-fire and post-fire burn-ratio patches.*
+
+![9-Qubit QCNN Architecture](docs/fig3_qcnn_architecture.png)
+
+*Fig. 3. Three-stage 9-qubit QCNN core ($9 \to 4 \to 2 \to 1$ active qubits; 62 trainable quantum parameters; 19 two-qubit pairs; 26 logical two-qubit gates / 40 elementary CNOTs).*
+
+### Architecture Summary (17,550 Total Hybrid Parameters)
+
+1. **Multi-Sensor Harmonization & Validity Masking (`dataset_cd.py`):** Harmonizes `(SWIR-2, NIR, Red)` by physical wavelength (`B7/B4/B3` for 15-band Landsat-7 ETM+; `B7/B5/B4` for 17-band Landsat-8 OLI), rescales `[0.0, 0.5]` reflectance to `[0, 1]`, and restricts loss and metric aggregation to valid pixels ($M_{\mathrm{valid}}$, $\tau_s = 0.015$) to exclude orbital swath borders and ETM+ SLC-off gaps. Binary reference rasters are 500 m MODIS Collection 6 `MCD64A1` masks nearest-neighbor resampled to 30 m.
+2. **Burn-Ratio Projection & Guarded Per-Patch Min-Max Scaling:** Projects each $11 \times 11$ pre-fire and post-fire patch via $I_t = X_{t,\mathrm{NIR}} / (X_{t,\mathrm{NIR}} + X_{t,\mathrm{SWIR2}} + 10^{-4})$, applies guarded joint min-max scaling ($\delta_{\mathrm{span}} = 0.05$), and zero-pads $242 \to 256 = 2^8$ entries.
+3. **9-Qubit FRQI State Preparation & 62-Parameter QCNN Core (`model_qacd.py`):** Encodes the 256 amplitudes into 8 position qubits ($q_0$ MSB to $q_7$ LSB) entangled with color qubit $q_8$, then evolves through three staggered Conv/Pool stages (19 pairs; 12 `CX` + 7 `CRZ` + 7 `CRY` = 26 logical two-qubit gates) using exact Heisenberg-adjoint pullback $p_Q(v;\Theta) = \langle I(v) | \operatorname{Re}(H(\Theta)) | I(v) \rangle$.
+4. **Classical Spatial Refinement Head (`SpatialRefinementHead`):** Five-layer convolutional decoder (`5->24->48->12->7->1` + learnable quantum logit residual $\alpha_Q$; exactly 17,488 classical parameters, 1.14 GMACs per $256 \times 256$ tile) fusing upsampled $p_Q$ with local spectral differences $(\Delta I, \Delta X)$.
 
 ---
 
-## Repository Structure (Proposed QACD Framework)
+## Verified Quantitative Performance (3 Seeds: `42, 1, 7`)
+
+All metrics below are computed strictly from exact integer `(TP, FP, FN, TN)` pixel counts over swath-valid pixels (`27,185,028` valid pixels on Test 1; `14,423,792` valid pixels on Test 2) with zero ground-truth leakage:
+
+| QACD Configuration | Quantum Params | Classical Params | Test 1 F1 (Mean ± SD) | Test 1 cIoU (Mean ± SD) | Bandhavgarh F1 (Prompt India) | Test 2 All F1 (Incl. 3-Mo. Flush) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **QCNN-62 Alone** (No Conv Head) | 62 | 2 | 0.788 ± 0.007 | 0.650 ± 0.009 | 0.299 ± 0.033 | 0.111 ± 0.009 |
+| **Head Alone** ($p_Q = 0.5$) | 0 | 17,488 | 0.794 ± 0.011 | 0.658 ± 0.015 | 0.282 ± 0.005 | 0.125 ± 0.001 |
+| **Classical-62 + Head** | 0 | 17,550 | 0.804 ± 0.009 | 0.672 ± 0.012 | 0.303 ± 0.015 | 0.125 ± 0.007 |
+| **Frozen Random QCNN + Head** | 0 (62 frozen) | 17,488 | 0.797 ± 0.018 | 0.662 ± 0.025 | 0.274 ± 0.009 | 0.123 ± 0.004 |
+| **Full QACD (Proposed)** | **62** | **17,488** | **0.828 ± 0.021** | **0.707 ± 0.030** | **0.324 ± 0.025** | **0.133 ± 0.004** |
+
+---
+
+## Repository Structure
 
 ```text
 .
-├── qcnn_change_detection.py          # Standalone Qiskit FRQI-QCNN pipeline (patch training & GeoTIFF map export)
-├── model_qcnn.py                     # 9-qubit FRQI state preparation + 3-stage QCNN circuit implementation
-├── model_qacd.py                     # Proposed hybrid QACD model architecture & spatial refinement head
-├── dataset_cd.py                     # Multi-continental Landsat-8 OLI dataset loader & orbital swath mask
-├── run_rgb_evaluation.py             # Evaluation script for the proposed QACD model (Test 1 Global & Test 2 India)
-├── qacd_rgb.pth                      # Pretrained QACD model checkpoint
-├── requirements.txt                  # Python package dependencies
-└── docs/                             # Study area map (Fig. 1) & FRQI encoding diagram (Fig. 2)
-    ├── study_areas_map.jpg
-    └── method_overview.png
+├── model_qacd.py                  # Zero-leakage 9-qubit FRQI-QCNN + SpatialRefinementHead + ablation modes
+├── dataset_cd.py                  # Multi-sensor Landsat-7 ETM+ / Landsat-8 OLI GeoTIFF loader & M_valid mask
+├── train_eval_qacd.py             # End-to-end 2-stage training, threshold calibration, and evaluation CLI
+├── qiskit_noise_verification.py   # Qiskit 1.x statevector equivalence, transpiled cost, and NISQ noise audit
+├── checkpoints/                   # Verified zero-leakage PyTorch weights (~226 KB total)
+│   ├── QACD_Proposed_seed42.pt
+│   ├── QACD_Proposed_seed1.pt
+│   ├── QACD_Proposed_seed7.pt
+│   └── B4_QCNN62_Alone_seed42.pt
+├── docs/                          # High-resolution architecture and study area figures
+│   ├── fig1_study_areas.png
+│   ├── fig2_frqi_pipeline.png
+│   └── fig3_qcnn_architecture.png
+├── requirements.txt
+└── LICENSE
 ```
 
 ---
 
-## Installation & Usage
+## Quick Start
 
 ### 1. Install Dependencies
 
@@ -69,59 +83,64 @@ The resulting 9-qubit FRQI state is processed by a three-stage hierarchical QCNN
 pip install -r requirements.txt
 ```
 
-### 2. Run the Standalone Qiskit FRQI-QCNN Pipeline
-
-Place your bi-temporal raster data under `loc/` (training) and `india_loc/` (testing), then run:
+### 2. Verify Exact Quantum Pullback & Parameter Audit (No Dataset Required)
 
 ```bash
-python qcnn_change_detection.py
+python model_qacd.py
 ```
 
-### 3. Evaluate the Proposed QACD Model on Test Benchmarks
+### 3. Evaluate Pretrained QACD Checkpoint on Local GeoTIFF Archive
+
+Place the co-registered GeoTIFF folders (`A/`, `B/`, `ground_truth/`) under `data/Final_with_India/` and run:
 
 ```bash
-python run_rgb_evaluation.py
+python train_eval_qacd.py --eval-only --checkpoint checkpoints/QACD_Proposed_seed42.pt --dataset-root data/Final_with_India
+```
+
+### 4. Retrain QACD or Run Controlled Architectural Ablations
+
+```bash
+# Full QACD (seed 42)
+python train_eval_qacd.py --mode full --seed 42 --dataset-root data/Final_with_India --save-checkpoint outputs/qacd_seed42.pt
+
+# Standalone 62-parameter QCNN core (no convolutional head)
+python train_eval_qacd.py --mode qcnn_only --seed 42 --dataset-root data/Final_with_India
+
+# Classical SpatialRefinementHead alone
+python train_eval_qacd.py --mode head_only --seed 42 --dataset-root data/Final_with_India
+```
+
+### 5. Optional Qiskit Circuit & NISQ Noise Verification
+
+```bash
+pip install qiskit qiskit-aer qiskit-ibm-runtime
+python qiskit_noise_verification.py --mode self-test
+python qiskit_noise_verification.py --mode cost --checkpoint checkpoints/QACD_Proposed_seed42.pt
 ```
 
 ---
 
-## Classical Baseline Algorithms (Reference Citations)
+## Reference Citations (Classical Baselines & Quantum Foundations)
 
-This repository contains exclusively the proposed **QACD (FRQI-QCNN)** implementation. For the classical change detection baselines and radiometric burn-severity indices benchmarked in our study, please refer to their original publications and official implementations:
-
-1. **Siamese U-Net (FC-Siam-diff):**
-   > R. C. Daudt, B. Le Saux, and A. Boulch, "Fully convolutional siamese networks for change detection," in *Proc. 25th IEEE International Conference on Image Processing (ICIP)*, Athens, Greece, Oct. 2018, pp. 4063–4067, doi: [10.1109/ICIP.2018.8451652](https://doi.org/10.1109/ICIP.2018.8451652).
-
-2. **ChangeFormer (Hierarchical Mix-Transformer Siamese Network):**
-   > W. G. C. Bandara and V. M. Patel, "A transformer-based siamese network for change detection," in *Proc. IEEE International Geoscience and Remote Sensing Symposium (IGARSS)*, Kuala Lumpur, Malaysia, Jul. 2022, pp. 207–210, doi: [10.1109/IGARSS46834.2022.9883686](https://doi.org/10.1109/IGARSS46834.2022.9883686).
-
-3. **MaskCD (Mask-Classification Change Detection Transformer):**
-   > W. Yu, X. Zhang, S. Pun, and M. Liu, "MaskCD: A remote sensing change detection network based on mask classification," *IEEE Transactions on Geoscience and Remote Sensing*, vol. 62, pp. 1–16, 2024, Art. no. 5621216, doi: [10.1109/TGRS.2024.3392104](https://doi.org/10.1109/TGRS.2024.3392104).
-
-4. **BIT (Bi-Temporal Image Transformer):**
-   > H. Chen, Z. Qi, and Z. Shi, "Remote sensing image change detection with transformers," *IEEE Transactions on Geoscience and Remote Sensing*, vol. 60, pp. 1–14, 2022, Art. no. 5607514, doi: [10.1109/TGRS.2021.3095166](https://doi.org/10.1109/TGRS.2021.3095166).
-
-5. **USGS dNBR Burn Severity Thresholding:**
-   > C. H. Key and N. C. Benson, "Landscape assessment (LA): Sampling and analysis methods," in *FIREMON: Fire Effects Monitoring and Inventory System*, Gen. Tech. Rep. RMRS-GTR-164-CD, Ogden, UT, USA: USDA Forest Service, Rocky Mountain Research Station, 2006, pp. LA-1–LA-55.
-   > J. D. Miller and A. E. Thode, "Quantifying burn severity in a heterogeneous landscape with a relative version of the delta Normalized Burn Ratio (dNBR)," *Remote Sensing of Environment*, vol. 109, no. 1, pp. 66–80, Jul. 2007, doi: [10.1016/j.rse.2006.12.006](https://doi.org/10.1016/j.rse.2006.12.006).
-
-### Foundational Quantum Computing References
-
-- **FRQI (Flexible Representation of Quantum Images):**
-  > P. Q. Le, F. Dong, and K. Hirota, "A flexible representation of quantum images for polynomial preparation, image compression, and processing operations," *Quantum Information Processing*, vol. 10, no. 1, pp. 63–84, Feb. 2011, doi: [10.1007/s11128-010-0177-y](https://doi.org/10.1007/s11128-010-0177-y).
-- **QCNN (Quantum Convolutional Neural Networks):**
-  > I. Cong, S. Choi, and M. D. Lukin, "Quantum convolutional neural networks," *Nature Physics*, vol. 15, no. 12, pp. 1273–1278, Dec. 2019, doi: [10.1038/s41567-019-0648-8](https://doi.org/10.1038/s41567-019-0648-8).
+- **FRQI:** Le, P. Q., Dong, F., Hirota, K., 2011. A flexible representation of quantum images for polynomial preparation, image compression, and processing operations. *Quantum Information Processing* 10, 63–84. doi:[10.1007/s11128-010-0177-y](https://doi.org/10.1007/s11128-010-0177-y).
+- **QCNN:** Cong, I., Choi, S., Lukin, M. D., 2019. Quantum convolutional neural networks. *Nature Physics* 15, 1273–1278. doi:[10.1038/s41567-019-0648-8](https://doi.org/10.1038/s41567-019-0648-8).
+- **Siamese U-Net:** Daudt, R. C., Le Saux, B., Boulch, A., 2018. Fully convolutional Siamese networks for change detection. *Proc. IEEE ICIP*, pp. 4063–4067. doi:[10.1109/ICIP.2018.8451652](https://doi.org/10.1109/ICIP.2018.8451652).
+- **ChangeFormer:** Bandara, W. G. C., Patel, V. M., 2022. A transformer-based Siamese network for change detection. *Proc. IEEE IGARSS*, pp. 207–210. doi:[10.1109/IGARSS46834.2022.9883686](https://doi.org/10.1109/IGARSS46834.2022.9883686).
+- **MaskCD:** Yu, W., Zhang, X., Das, S., Zhu, X. X., Ghamisi, P., 2024. MaskCD: A remote sensing change detection network based on mask classification. *IEEE Transactions on Geoscience and Remote Sensing* 62, 1–16. doi:[10.1109/TGRS.2024.3424300](https://doi.org/10.1109/TGRS.2024.3424300).
+- **dNBR / RdNBR / MODIS MCD64A1:** Key & Benson (2006); Miller & Thode (2007), doi:[10.1016/j.rse.2006.12.006](https://doi.org/10.1016/j.rse.2006.12.006); Giglio et al. (2018), doi:[10.1016/j.rse.2018.08.005](https://doi.org/10.1016/j.rse.2018.08.005).
 
 ---
 
 ## Authors
 
-- **M. S. Shyam Sunder** — Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India (`murushyam@gmail.com`)
-- **Çağın Bera Bay** — FMV Işık Erenköy Science High School, Istanbul, Türkiye
-- **Yasemin Poyraz Koçak** — Department of Computer Technologies, Istanbul University-Cerrahpaşa, Istanbul, Türkiye
-- **Bhishma Tyagi** (*Corresponding Author*) — Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India (`tyagib@nitrkl.ac.in`)
+- **M. S. Shyam Sunder** (First Author), Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India (`murushyam@gmail.com`; ORCID: `0000-0002-9964-6199`)
+- **Cagin Bera Bay**, FMV Işık Erenköy Science High School, İstanbul, Türkiye (ORCID: `0009-0007-1232-4204`)
+- **Yasemin Poyraz Koçak**, Department of Computer Technologies, Istanbul University-Cerrahpaşa, İstanbul, Türkiye (ORCID: `0000-0002-1502-7260`)
+- **Prof. Bhishma Tyagi** (*Corresponding Author*, Professor), Department of Earth and Atmospheric Sciences, National Institute of Technology Rourkela, Odisha, India (`tyagib@nitrkl.ac.in`; ORCID: `0000-0001-9210-383X`)
 
----
+## Data Availability
+
+Raw Landsat-7 ETM+, Landsat-8 OLI Collection 2 Level-2 surface reflectance products, and MODIS MCD64A1 Collection 6 burned-area masks are publicly available via [USGS EarthExplorer](https://earthexplorer.usgs.gov/) and [NASA LP DAAC](https://lpdaac.usgs.gov/). The preprocessed tile archive and raw confusion-matrix outputs are available from the corresponding author upon reasonable request.
 
 ## License
 

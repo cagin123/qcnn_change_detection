@@ -1,159 +1,141 @@
 """
-================================================================================
-UNIFIED BITEMPORAL CHANGE DETECTION DATASET & DATA LOADER
-================================================================================
-Provides a PyTorch Dataset for loading pre/post fire scenes and ground truth
-burn scar masks from the extracted Final_with_India directory using tifffile.
-Supports both multispectral Landsat 6-band mode (B2-B7) and single-band NBR mode.
-================================================================================
+Multi-sensor Landsat-7 ETM+ (15-band) and Landsat-8 OLI (17-band) Collection 2
+Level-2 dataset loader for the QACD wildfire burned-area mapping framework.
+
+Features:
+  - Physical wavelength band harmonization across Landsat-7 ETM+ (2011 Wallow Fire:
+    RGB=[2, 1, 0]=B3/B2/B1, SWIR2/NIR/Red=[7, 3, 2]=B7/B4/B3) and Landsat-8 OLI
+    (2019-2022 events: RGB=[3, 2, 1]=B4/B3/B2, SWIR2/NIR/Red=[6, 4, 3]=B7/B5/B4).
+  - Reflectance clipping to [0.0, 0.5] and linear rescaling to [0, 1].
+  - Valid-pixel orbital swath and ETM+ SLC-off scan-gap masking (tau_s = 0.015).
+  - Strict event-level dataset partitioning across 1,486 bi-temporal 256x256 tiles
+    (650 Train, 195 Val, 416 Test 1, 225 Test 2) to prevent spatial leakage.
 """
 
-import os
-import glob
+from pathlib import Path
 import numpy as np
-import torch
-from torch.utils.data import Dataset, DataLoader
 import tifffile
+import torch
+from torch.utils.data import Dataset
 
 
-class WildfireChangeDetectionDataset(Dataset):
+SPLITS = {
+    "train": ("wallow_fire", "evans_fire", "august_fire_complex"),
+    "val": ("bighorn_fire",),
+    "test1": ("mckinney_fire", "gospers_fire"),
+    "test2": ("Uttarakhand_Fire_2021", "Similipal_Fire_2021", "Bandhavgarh_Fire"),
+}
+
+TEST_FIRES = (
+    "mckinney_fire",
+    "gospers_fire",
+    "Bandhavgarh_Fire",
+    "Uttarakhand_Fire_2021",
+    "Similipal_Fire_2021",
+)
+
+
+def load_bitemporal_tile(
+    dataset_root: Path,
+    fname: str,
+    spectral_mode: str = "swir_nir_red",
+    tau_swath: float = 0.015,
+) -> dict:
     """
-    Bitemporal Wildfire Change Detection Dataset.
-
-    Args:
-        data_dir (str): Path to 'Final_with_India' directory.
-        mode (str): 'multispectral' (6 Landsat bands B2-B7) or 'nbr' (single-band NBR).
-        fire_filter (list): Optional list of fire stems (e.g. ['august_fire_complex', 'wallow_fire']).
-                            If None, loads all available tiles.
-        transform (callable): Optional data augmentation callable.
+    Loads one co-registered 256x256 bi-temporal GeoTIFF tile pair (B = pre-fire,
+    A = post-fire) together with its 500 m MODIS MCD64A1 reference mask resampled
+    to the 30 m EPSG:3857 grid and computes the swath/SLC-off validity mask M_valid.
     """
-    def __init__(self, data_dir="Final_with_India", mode="multispectral", fire_filter=None, transform=None):
-        self.data_dir = data_dir
-        self.mode = mode
-        self.transform = transform
+    arr_pre = tifffile.imread(dataset_root / "B" / fname).astype(np.float32)
+    arr_post = tifffile.imread(dataset_root / "A" / fname).astype(np.float32)
+    gt_raw = tifffile.imread(dataset_root / "ground_truth" / fname).astype(np.float32)
+    gt = (np.nan_to_num(gt_raw, nan=0.0) > 0.5).astype(np.uint8)
 
-        if mode == "multispectral":
-            dir_A = os.path.join(data_dir, "A")
-            dir_B = os.path.join(data_dir, "B")
-        else:
-            dir_A = os.path.join(data_dir, "nbrA")
-            dir_B = os.path.join(data_dir, "nbrB")
+    if arr_pre.shape[-1] == 15:
+        # Landsat-7 ETM+ Collection 2 Level-2 (2011 Wallow Fire)
+        rgb_idx, sw_idx = [2, 1, 0], [7, 3, 2]
+    else:
+        # Landsat-8 OLI Collection 2 Level-2 (2019-2022 events)
+        rgb_idx, sw_idx = [3, 2, 1], [6, 4, 3]
 
-        dir_GT = os.path.join(data_dir, "ground_truth")
+    raw_pre_rgb, raw_post_rgb = arr_pre[..., rgb_idx], arr_post[..., rgb_idx]
+    raw_pre_sw, raw_post_sw = arr_pre[..., sw_idx], arr_post[..., sw_idx]
 
-        all_A = sorted(glob.glob(os.path.join(dir_A, "*.tif")))
-        self.samples = []
+    finite = (
+        np.isfinite(raw_pre_rgb).all(axis=-1)
+        & np.isfinite(raw_post_rgb).all(axis=-1)
+        & np.isfinite(raw_pre_sw).all(axis=-1)
+        & np.isfinite(raw_post_sw).all(axis=-1)
+    )
 
-        for p_A in all_A:
-            fname = os.path.basename(p_A)
-            p_B = os.path.join(dir_B, fname)
-            p_GT = os.path.join(dir_GT, fname)
+    pre_rgb = np.clip(np.nan_to_num(raw_pre_rgb, nan=0.0, posinf=0.5, neginf=0.0), 0.0, 0.5) / 0.5
+    post_rgb = np.clip(np.nan_to_num(raw_post_rgb, nan=0.0, posinf=0.5, neginf=0.0), 0.0, 0.5) / 0.5
+    pre_sw = np.clip(np.nan_to_num(raw_pre_sw, nan=0.0, posinf=0.5, neginf=0.0), 0.0, 0.5) / 0.5
+    post_sw = np.clip(np.nan_to_num(raw_post_sw, nan=0.0, posinf=0.5, neginf=0.0), 0.0, 0.5) / 0.5
 
-            if not (os.path.exists(p_B) and os.path.exists(p_GT)):
-                continue
+    valid = (
+        finite
+        & (np.max(pre_rgb, axis=-1) > tau_swath)
+        & (np.max(post_rgb, axis=-1) > tau_swath)
+    ).astype(np.uint8)
 
-            if fire_filter is not None:
-                if not any(f_stem in fname for f_stem in fire_filter):
-                    continue
+    pre_img = pre_sw if spectral_mode == "swir_nir_red" else pre_rgb
+    post_img = post_sw if spectral_mode == "swir_nir_red" else post_rgb
 
-            self.samples.append((p_A, p_B, p_GT))
-
-        print(f"Loaded {len(self.samples)} tile pairs for mode='{mode}' (fire_filter={fire_filter})")
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        path_A, path_B, path_GT = self.samples[idx]
-
-        # Read rasters
-        raw_A = tifffile.imread(path_A).astype(np.float32)
-        raw_B = tifffile.imread(path_B).astype(np.float32)
-        raw_GT = tifffile.imread(path_GT).astype(np.float32)
-
-        if self.mode == "multispectral":
-            # Select Landsat bands B2 to B7 (indices 1 to 6)
-            if raw_A.ndim == 3 and raw_A.shape[-1] >= 7:
-                img_A = raw_A[:, :, 1:7]
-                img_B = raw_B[:, :, 1:7]
-            else:
-                img_A = raw_A
-                img_B = raw_B
-
-            # Replace NaNs/Infs and normalize from [0, 0.5] reflectance to [0, 1]
-            img_A = np.nan_to_num(img_A, nan=0.0, posinf=0.5, neginf=0.0)
-            img_B = np.nan_to_num(img_B, nan=0.0, posinf=0.5, neginf=0.0)
-            img_A = np.clip(img_A, 0.0, 0.5) / 0.5
-            img_B = np.clip(img_B, 0.0, 0.5) / 0.5
-
-            # [H, W, C] -> [C, H, W]
-            img_A = np.transpose(img_A, (2, 0, 1))
-            img_B = np.transpose(img_B, (2, 0, 1))
-
-        else:  # NBR mode (single channel [1, H, W])
-            img_A = np.nan_to_num(raw_A, nan=0.0, posinf=1.0, neginf=-1.0)
-            img_B = np.nan_to_num(raw_B, nan=0.0, posinf=1.0, neginf=-1.0)
-            if img_A.ndim == 2:
-                img_A = np.expand_dims(img_A, axis=0)
-                img_B = np.expand_dims(img_B, axis=0)
-            else:
-                img_A = np.transpose(img_A, (2, 0, 1))[:1]
-                img_B = np.transpose(img_B, (2, 0, 1))[:1]
-
-        # Process ground truth: binary mask [1, H, W]
-        mask = np.nan_to_num(raw_GT, nan=0.0)
-        mask = (mask > 0.5).astype(np.float32)
-        if mask.ndim == 2:
-            mask = np.expand_dims(mask, axis=0)
-        elif mask.ndim == 3:
-            mask = np.transpose(mask, (2, 0, 1))[:1]
-
-        # Convert to PyTorch tensors
-        tensor_A = torch.from_numpy(img_A.copy())
-        tensor_B = torch.from_numpy(img_B.copy())
-        tensor_GT = torch.from_numpy(mask.copy())
-
-        return {
-            "pre": tensor_B,     # Image B (pre-event)
-            "post": tensor_A,    # Image A (post-event)
-            "mask": tensor_GT,   # Ground truth mask
-            "name": os.path.basename(path_A)
-        }
+    return {
+        "fname": fname,
+        "pre": torch.from_numpy(pre_img.transpose(2, 0, 1).copy()).float(),
+        "post": torch.from_numpy(post_img.transpose(2, 0, 1).copy()).float(),
+        "gt": torch.from_numpy(gt).unsqueeze(0).float(),
+        "valid": torch.from_numpy(valid).unsqueeze(0).float(),
+        "has_burn": bool((gt & valid).sum() > 50),
+    }
 
 
-def get_dataloaders(data_dir="Final_with_India", batch_size=4, mode="multispectral"):
-    """
-    Returns train, validation, and test DataLoaders following the research splits.
-    Train: Wallow, Evans Canyon, August Complex
-    Val  : Bighorn
-    Test1 (Global): McKinney, Gospers Mountain
-    Test2 (India) : Uttarakhand, Similipal, Bandhavgarh
-    """
-    train_fires = ["wallow_fire", "evans_fire", "august_fire_complex"]
-    val_fires   = ["bighorn_fire"]
-    test1_fires = ["mckinney_fire", "gospers_fire"]
-    test2_fires = ["Uttarakhand_Fire_2021", "Similipal_Fire_2021", "Bandhavgarh_Fire"]
-
-    train_ds = WildfireChangeDetectionDataset(data_dir, mode=mode, fire_filter=train_fires)
-    val_ds   = WildfireChangeDetectionDataset(data_dir, mode=mode, fire_filter=val_fires)
-    test1_ds = WildfireChangeDetectionDataset(data_dir, mode=mode, fire_filter=test1_fires)
-    test2_ds = WildfireChangeDetectionDataset(data_dir, mode=mode, fire_filter=test2_fires)
-
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader   = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
-    test1_loader = DataLoader(test1_ds, batch_size=batch_size, shuffle=False)
-    test2_loader = DataLoader(test2_ds, batch_size=batch_size, shuffle=False)
-
-    return train_loader, val_loader, test1_loader, test2_loader
+def list_split_files(dataset_root: Path, split_name: str) -> list:
+    prefixes = SPLITS[split_name]
+    gt_dir = dataset_root / "ground_truth"
+    return sorted(
+        p.name for p in gt_dir.glob("*.tif") if any(p.name.startswith(pref) for pref in prefixes)
+    )
 
 
-if __name__ == "__main__":
-    print("Testing WildfireChangeDetectionDataset...")
-    ds = WildfireChangeDetectionDataset(data_dir="Final_with_India", mode="multispectral")
-    sample = ds[0]
-    print(f"Sample Tile Name : {sample['name']}")
-    print(f"Pre-Fire Tensor  : {sample['pre'].shape}, dtype={sample['pre'].dtype}")
-    print(f"Post-Fire Tensor : {sample['post'].shape}, dtype={sample['post'].dtype}")
-    print(f"Ground Truth Mask: {sample['mask'].shape}, dtype={sample['mask'].dtype}")
-    print(f"Unique Mask Vals : {torch.unique(sample['mask']).tolist()}")
-    print("Dataset loader verified successfully.")
+class WildfireChangeDataset(Dataset):
+    """PyTorch Dataset for event-partitioned bi-temporal wildfire GeoTIFF tiles."""
+
+    def __init__(
+        self,
+        dataset_root: Path,
+        split: str = "test1",
+        spectral_mode: str = "swir_nir_red",
+        crop_size: int = None,
+        seed: int = 42,
+    ):
+        super().__init__()
+        self.dataset_root = Path(dataset_root)
+        self.split = split
+        self.spectral_mode = spectral_mode
+        self.crop_size = crop_size
+        self.rng = np.random.default_rng(seed)
+        self.files = list_split_files(self.dataset_root, split)
+        self.prefixes = SPLITS[split]
+
+    def __len__(self) -> int:
+        return len(self.files)
+
+    def __getitem__(self, idx: int) -> dict:
+        fname = self.files[idx]
+        item = load_bitemporal_tile(self.dataset_root, fname, spectral_mode=self.spectral_mode)
+        item["fire"] = next(pref for pref in self.prefixes if fname.startswith(pref))
+
+        if self.crop_size is not None:
+            _, H, W = item["pre"].shape
+            cs = self.crop_size
+            r0 = int(self.rng.integers(0, max(1, H - cs + 1)))
+            c0 = int(self.rng.integers(0, max(1, W - cs + 1)))
+            item["pre"] = item["pre"][:, r0 : r0 + cs, c0 : c0 + cs]
+            item["post"] = item["post"][:, r0 : r0 + cs, c0 : c0 + cs]
+            item["gt"] = item["gt"][:, r0 : r0 + cs, c0 : c0 + cs]
+            item["valid"] = item["valid"][:, r0 : r0 + cs, c0 : c0 + cs]
+
+        return item
